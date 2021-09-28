@@ -1,0 +1,9 @@
+{
+	"authors": [
+		"isakh"
+	],
+	"copyright": "Copyright © 2021, isakh",
+	"description": "A minimal D application.",
+	"license": "proprietary",
+	"name": "d"
+}
