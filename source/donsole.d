@@ -178,7 +178,58 @@ private void moveCursor(int x, int y) {
 	setCursorPosition(max(pos.x + x, 0), max(0, pos.y + y));
 }
 
+// Moves cursor up n rows
+void moveCursorUp(int n = 1) {
+     moveCursor(0, -n);
+}
+
+// Moves cursor down n rows
+void moveCursorDown(int n = 1) {
+     moveCursor(0, n);
+}
+
+// Move cursor left n columns
+void moveCursorLeft(int n = 1) {
+     moveCursor(-n, 0);
+}
+
+// Move cursor right n columns
+void moveCursorRight(int n = 1) {
+     moveCursor(n, 0);
+}
+
+// Check if (any) key is pressed
+bool kbhit() {
+     return WaitForSingleObject(handleInput, 0) == WAIT_OBJECT_0;
+}
+
+// Set cursor visibility
+void cursorVisible(bool visible) @property {
+     CONSOLE_CURSOR_INFO i;
+     GetConsoleCursorInfo(handleOutput, &i);
+     i.bVisible = visible;
+     SetConsoleCursorInfo(handleOutput, &i);
+}
+
 //END
+
+// Writes at data to given point
+void writeAt(T)(Point point, T data) {
+     setCursorPosition(point.x, point.y);
+     write(data);
+     stdout.flush();
+}
+
+// Clears console
+void clearScreen() {
+     auto size = size;
+     short length = cast(short)(size.x * size.y); //num of chars to write
+     setCursorPosition(0, 0);
+
+     import std.array : replicate;
+     write(replicate(" ", length));
+     stdout.flush();
+}
 
 // Get console width
 @property int width() {
@@ -189,6 +240,9 @@ private void moveCursor(int x, int y) {
 @property int height() {
 	return size.y;
 }
+
+// alias EnumTypedef!(Color, "fg") Fg;
+// alias EnumTypedef!(Color, "bg") Bg;
 
 void main() {
 	writeln("Console Console Console");
