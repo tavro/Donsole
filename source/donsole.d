@@ -1,4 +1,9 @@
-import std.typecons, std.algorithm;
+// Uses WinAPI to colorize and format text in console
+
+module donsole;
+import std.typecons, std.algorithm, std.array;
+
+alias void delegate(CloseEvent) @system CloseHandler;
 
 enum OutputStream {
      stdout, // Standard output
@@ -31,6 +36,19 @@ struct InputMode {
 
 enum SpecialKey {
      home = 512,
+
+     pageUp,
+     pageDown,
+
+     end,
+     delete_,
+     insert,
+
+     up,
+     down,
+     left,
+     right,
+
      escape = 27,
      tab = 9,
 }
@@ -73,6 +91,62 @@ private __gshared {
 	HANDLE handleOutput = null, handleInput = null;
 
 	Color fg, bg, defFg, defBg;
+	CloseHandler[] closeHandlers;
+}
+
+shared static this() {
+       loadDefaultColors(OutputStream.stdout);
+       SetConsoleCtrlHandler(cast(PHANDLER_ROUTINE)&defaultCloseHandler, true);
+}
+
+import std.string;
+
+// Sets console title
+void title(string title) @property {
+     SetConsoleTitleA(toStringz(title));
+}
+
+private ushort buildColor(Color fg, Color bg) {
+	if(fg == Color.initial) {
+	      fg = defFg;
+	}
+	if(bg == Color.initial) {
+	      bg = defBg;
+	}
+	return cast(ushort)(fg | bg << 4);
+}
+
+// Add handler for close event
+void addCloseHandler(CloseHandler closeHandler) {
+     closeHandlers ~= closeHandler; // In this case ~= means append
+}
+
+// Gets input mode
+InputMode mode() @property {
+     InputMode im;
+     DWORD m;
+     GetConsoleMode(handleInput, &m);
+
+     // !! basically converts to boolean
+     im.echo = !!(m & ENABLE_ECHO_INPUT);
+     im.line = !!(m & ENABLE_LINE_INPUT);
+     return im;
+}
+
+// Sets input mode
+void mode(InputMode im) @property {
+     DWORD m;
+
+     // m |= x is basically m = m | x (bitwise or)
+     // m &= x is basically m = m & x (bitwise and)
+     (im.echo) ? (m |= ENABLE_ECHO_INPUT) : (m &= ~ENABLE_ECHO_INPUT);
+     (im.line) ? (m |= ENABLE_LINE_INPUT) : (m &= ~ENABLE_LINE_INPUT);
+     SetConsoleMode(handleInput, m);
+}
+
+private void updateColor() {
+	stdout.flush();
+	SetConsoleTextAttribute(handleOutput, buildColor(fg, bg));
 }
 
 private void loadDefaultColors(OutputStream os) {
@@ -123,21 +197,6 @@ Point size() @property {
 Point cursorPos() @property {
       GetConsoleScreenBufferInfo(handleOutput, &info);
       return Point(info.dwCursorPosition.X, min(info.dwCursorPosition.Y, height));
-}
-
-private ushort buildColor(Color fg, Color bg) {
-	if(fg == Color.initial) {
-	      fg = defFg;
-	}
-	if(bg == Color.initial) {
-	      bg = defBg;
-	}
-	return cast(ushort)(fg | bg << 4);
-}
-
-private void updateColor() {
-	stdout.flush();
-	SetConsoleTextAttribute(handleOutput, buildColor(fg, bg));
 }
 
 // Get current console font color
@@ -211,6 +270,47 @@ void cursorVisible(bool visible) @property {
      SetConsoleCursorInfo(handleOutput, &i);
 }
 
+private CloseEvent idToCloseEvent(ulong i) {
+	CloseEvent event;
+
+	switch(i) {
+		case 0:
+		     event.type = CloseType.Interrupt;
+		break;
+		case 1:
+		     event.type = CloseType.Stop;
+		break;
+		default:
+		     event.type = CloseType.Other;
+	}
+	
+	event.isBlockable = (event.type != CloseType.Other);
+	return event;
+}
+
+private bool defaultCloseHandler(ulong reason) {
+	foreach(closeHandler; closeHandlers) {
+		closeHandler(idToCloseEvent(reason));
+	}
+	return true;
+}
+
+// Reads char without line buffering
+int getch(bool echo = false) {
+    INPUT_RECORD record;
+    DWORD count;
+    auto m = mode;
+    mode = InputMode.None;
+
+    do {
+       ReadConsoleInputA(handleInput, &record, 1, &count);
+    } // extra kbhit to ensure we're back on a fresh keydown next time this event happens
+    while ((record.EventType != KEY_EVENT || !record.KeyEvent.bKeyDown) && kbhit());
+
+    mode = m;
+    return record.KeyEvent.wVirtualKeyCode;
+}
+
 //END
 
 // Writes at data to given point
@@ -241,9 +341,104 @@ void clearScreen() {
 	return size.y;
 }
 
-// alias EnumTypedef!(Color, "fg") Fg;
-// alias EnumTypedef!(Color, "bg") Bg;
+struct EnumTypedef(T, string _name) if(is(T == enum)) {
+       public T val = T.init;
+       this(T v) {
+       	  val = v;
+       }
+
+       static EnumTypedef!(T, _name) onDispatch(string n)() {
+       	  return EnumTypedef!(T, _name)(__traits(getMember, val, n));
+       }
+}
+
+alias EnumTypedef!(Color, "fg") Fg;
+alias EnumTypedef!(Color, "bg") Bg;
+
+struct ColorTheme(Color fg, Color bg) {
+       string s;
+       this(string s) {
+       	  this.s = s;
+       }
+
+       void toString(scope void delegate(const(char)[]) sink) const {
+       	    auto _fg = foreground;
+	    auto _bg = background;
+
+	    foreground = fg;
+	    background = bg;
+
+	    sink(s.dup);
+
+	    foreground = _fg;
+	    background = _bg;
+       }
+}
+
+void resetColors() {
+     foreground = Color.initial;
+     background = Color.initial;
+}
+
+// Writes text to console (with color)
+void writec(T...)(T params) {
+     foreach(param; params) {
+     	static if(is(typeof(param) == Fg)) {
+	   foreground = param.val;
+	}
+	else static if(is(typeof(param) == Bg)) {
+	   background = param.val;
+	}
+	else {
+	     write(param);
+	}
+     }
+}
+
+// Writes line to console
+void writecln(T...)(T params) {
+     writec(params);
+     writeln();
+}
+
+// Fills area with char
+void fillArea(Point p1, Point p2, char fill) {
+     foreach(i; p1.y .. p2.y + 1) {
+         setCursorPosition(p1.x, i);
+	 //[0..1] converts char to char[]
+	 write(replicate((&fill)[0..1], p2.x - p1.x));
+	 stdout.flush();
+     }
+}
+
+// Draws box with border char
+void drawBox(Point p1, Point p2, char border) {
+     drawHorizontalLine(p1, p2.x - p1.x, border);
+
+     foreach(i; p1.y + 1 .. p2.y) {
+         setCursorPosition(p1.x, i);
+	 write(border);
+	 setCursorPosition(p2.x - 1, i);
+	 write(border);
+     }
+
+     drawHorizontalLine(Point(p1.x, p2.y), p2.x - p1.x, border);
+}
+
+// Draws horizontal line
+void drawHorizontalLine(Point point, int length, char fill) {
+     setCursorPosition(point.x, point.y);
+     write(replicate((&fill)[0..1], length));
+}
+
+// Draws vertical line
+void drawVerticalLine(Point point, int length, char fill) {
+     foreach(i; point.y .. length) {
+         setCursorPosition(point.x, i);
+	 write(fill);
+     }
+}
 
 void main() {
-	writeln("Console Console Console");
+	writeln("don Don Donsole!");
 }
